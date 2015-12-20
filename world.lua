@@ -36,6 +36,11 @@ typedef struct {
 void CheapTrick(double *x, int x_length, int fs, double *time_axis,
                 double *f0, int f0_length, CheapTrickOption *option,
                 double **spectrogram);
+
+void FlatCheapTrick(double *x, int x_length, int fs, double *time_axis,
+                    double *f0, int f0_length, CheapTrickOption *option,
+                    double *spectrogram_t7_buffer);
+
 void InitializeCheapTrickOption(CheapTrickOption *option);
 int GetFFTSizeForCheapTrick(int fs);
 
@@ -86,36 +91,17 @@ function world.CheapTrick(x, fs, timeAxis, f0)
    local option = ffi.new("CheapTrickOption[1]")
    world.C.InitializeCheapTrickOption(option)
 
-   print("q1: " .. option[0].q1)
-
    local fftTimeSize = f0:size(1)
    local fftFreqSize = world.C.GetFFTSizeForCheapTrick(fs)
 
-   local spectrogram = torch.DoubleTensor(fftTimeSize, fftFreqSize):contiguous()
-   local specArr = ffi.new("double*[?]", fftTimeSize)
-   local specArrRows = {}
-   for i=0,fftTimeSize do
-      specArr[i] = ffi.new("double[?]", fftFreqSize)
-      specArrRows[i] = specArr[i]
-   end
-
-   world.C.CheapTrick(x:data(), x:size(1), fs, timeAxis:data(), f0:data(),
-                      fftTimeSize, option, specArr)
-
-   print("Finished Cheap trick.")
-   print("time: " .. fftTimeSize)
-   print("freq: " .. fftFreqSize)
-   print("q1: " .. option[0].q1)
-   local spectrogram = spectrogram:contiguous()
-   print(spectrogram:size())
+   local spectrogram = torch.DoubleTensor(fftTimeSize, fftFreqSize)
+   assert(spectrogram:isContiguous())
    print(spectrogram:stride())
-   -- Dirty hack.
-   for i = 0, fftTimeSize - 1 do
-      for j = 0, fftFreqSize - 1 do
-         assert(i <  spectrogram:size(1) and j < spectrogram:size(2))
-         spectrogram[i+1][j+1] = 42 --specArr[i][j]
-      end
-   end
+   world.C.FlatCheapTrick(x:data(), x:size(1), fs, timeAxis:data(), f0:data(),
+                          fftTimeSize, option, spectrogram:data())
+
+   -- local dbg = require 'debugger'
+   -- dbg()
    return spectogram
 end
 
@@ -133,6 +119,7 @@ function main()
    local spectrogram = world.CheapTrick(x, fs, timeAxis, f0)
 
    gnuplot.plot(f0)
+   gnuplot.imagesc(spectrogram)
 end
 
 main()
