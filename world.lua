@@ -49,8 +49,9 @@ typedef struct {
   double dummy;  // This is the future update.
 } D4COption;
 
-void D4C(double *x, int x_length, int fs, double *time_axis, double *f0,
-  int f0_length, int fft_size, D4COption *option, double **aperiodicity);
+void FlatD4C(double *x, int x_length, int fs, double *time_axis, double *f0,
+             int f0_length, int fft_freq_size, D4COption *option,
+             double *aperiodicity_t7_buffer);
 ]]
 
 local world = {}
@@ -96,26 +97,30 @@ end
 function world.CheapTrick(x, fs, timeAxis, f0)
    local option = ffi.new("CheapTrickOption[1]")
    world.C.InitializeCheapTrickOption(option)
+   -- WARNING
+   -- This value is set specifically to match q1's value in example/test.cpp
+   -- I have no idea if it's any good or not.
+   option[0].q1 = -.15
 
    local fftTimeSize = f0:size(1)
    local fftFreqSize = world.C.GetFFTSizeForCheapTrick(fs)
 
-   local spectrogram = torch.DoubleTensor(fftTimeSize, fftFreqSize / 2 + 1)
+   local spectrogram = torch.DoubleTensor(fftTimeSize, math.floor(fftFreqSize / 2) + 1)
    assert(spectrogram:isContiguous())
-   print(spectrogram:stride())
    world.C.FlatCheapTrick(x:data(), x:size(1), fs, timeAxis:data(), f0:data(),
                           fftTimeSize, option, spectrogram:data())
    return spectrogram
 end
 
 function world.D4C(x, fs, timeAxis, f0)
-
    local fftTimeSize = f0:size(1)
+   local fftSize = world.C.GetFFTSizeForCheapTrick(fs)
+   local fftFreqSize = math.floor(fftSize / 2) + 1
+   local aperiodicity = torch.DoubleTensor(fftTimeSize, fftFreqSize)
+   assert(aperiodicity:isContiguous())
 
-   local aperiodicity = torch.DoubleTensor(fftTimeSize)
-
-   --world.C.D4C(x:data(), x:size(1), fs, timeAxis:data(), f0:data(),
-   --            fftTimeSize, , nil, )
+   world.C.FlatD4C(x:data(), x:size(1), fs, timeAxis:data(), f0:data(),
+                   fftTimeSize, fftFreqSize, nil, aperiodicity:data())
 
    return aperiodicity
 end
@@ -126,9 +131,9 @@ end
 
 function readTxt1Tensor(txt_file_name)
    local f = io.popen("wc -l " .. txt_file_name)
-   local num_rows = f:read("*n")
-   print("number of rows: " .. num_rows)
-   local tensor = torch.DoubleTensor(num_rows)
+   local numRows = f:read("*n")
+   print("number of rows: " .. numRows)
+   local tensor = torch.DoubleTensor(numRows)
    f:close()
 
    local i = 1
@@ -141,7 +146,34 @@ function readTxt1Tensor(txt_file_name)
 end
 
 function readTxt2Tensor(txt_file_name)
-   -- TODO
+   local f = io.popen("wc -l " .. txt_file_name)
+   local numRows = f:read("*n")
+   print("number of rows: " .. numRows)
+   f:close()
+
+   local tensor = nil
+   local numCols = 0
+
+   local i = 1
+   for line in io.lines(txt_file_name) do
+      if i == 1 then
+         for _ in line:gmatch("%S+") do
+            numCols = numCols + 1
+         end
+
+         tensor = torch.DoubleTensor(numRows, numCols)
+      end
+
+      local j = 1
+      for num in line:gmatch("%S+") do
+         num = tonumber(num)
+         tensor[i][j] = num
+         j = j + 1
+      end
+      i = i + 1
+   end
+
+   return tensor
 end
 
 tester = torch.Tester()
@@ -149,6 +181,9 @@ tester = torch.Tester()
 test = {}
 
 function test.test()
+   -- WARNING: audio.load does not normalize x. Try to read
+   -- WORLD code or Kaldi code to learn how to normalize
+   -- a wave.
    local x, fs = audio.load("code/WORLD/example/test16k.wav")
    assert(x:dim() == 2 and x:size(2) == 1)
    local x = x[{{},1}]
@@ -159,7 +194,6 @@ function test.test()
       tester:assert(f0:dim() == trueF0:dim() and f0:dim() == 1 and
                        f0:size(1) == trueF0:size(1),
                     "Sizes: " .. f0:size(1) .. ", " .. trueF0:size(1))
-      --gnuplot.plot(trueF0)
       tester:assert(torch.lt(torch.abs(f0 - trueF0), 1e-3):all())
    end
 
@@ -173,15 +207,36 @@ function test.test()
       gnuplot.plot(f0 - trueF0)
    end
 
-   local spectrogram = world.CheapTrick(x, fs, timeAxis, f0)
-   gfx.image(spectrogram)
+   spectrogram = world.CheapTrick(x, fs, timeAxis, f0)
 
+   do
+      trueSpectrogram = readTxt2Tensor("code/WORLD/ground_truth/spectrogram.txt")
+      tester:assert(spectrogram:dim() == trueSpectrogram:dim() and
+                       spectrogram:size(1) == trueSpectrogram:size(1) and
+                       spectrogram:size(2) == trueSpectrogram:size(2))
+      local correct = torch.lt(torch.abs(spectrogram - trueSpectrogram), 1e-3):sum()
+      local nDimensions = spectrogram:dim()
+
+      local total = 1
+      for i = 1,nDimensions do
+         total = total * spectrogram:size(i)
+      end
+      gfx.image(torch.log(spectrogram))
+
+      print("Correct / total = " .. correct .. "/" .. total)
+   end
+
+   aperiodicity = world.D4C(x, fs, timeAxis, f0)
+   gfx.image(aperiodicity)
+
+   --[[
    local windowSizeMs = 5
    local windowSizeSec = windowSizeMs / 1000
    local windowSizeSamples = windowSizeSec * fs
    local smSpectrogram = audio.spectrogram(x, windowSizeSamples, 'hamming', windowSizeSamples / 16)
    gfx.image(smSpectrogram)
    return spectrogram, smSpectrogram
+   --]]
 end
 
 tester:add(test)
