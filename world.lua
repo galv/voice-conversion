@@ -54,7 +54,8 @@ void FlatD4C(double *x, int x_length, int fs, double *time_axis, double *f0,
              double *aperiodicity_t7_buffer);
 ]]
 
-local world = {}
+world = {}
+
 if paths.is_mac() then
    world.C = ffi.load(world_dir .. "build/src/libworld.dylib")
 elseif paths.is_windows() then
@@ -125,6 +126,15 @@ function world.D4C(x, fs, timeAxis, f0)
    return aperiodicity
 end
 
+function world.doAll(x, fs)
+   local f0, timeAxis = world.dio(x, fs)
+   local f0 = world.stoneMask(x, fs, timeAxis, f0)
+   local spectrogram = world.CheapTrick(x, fs, timeAxis, f0)
+   local aperiodicity = world.D4C(x, fs, timeAxis, f0)
+
+   return f0, timeAxis, spectrogram, aperiodicity
+end
+
 -- For autoencoder: All speakers should have same representation for same sentence.
 -- May not be allowed by constest rules.
 -- kaldi-asr.org may have some pretrained neural net models.
@@ -161,13 +171,13 @@ function readTxt2Tensor(txt_file_name)
             numCols = numCols + 1
          end
 
-         tensor = torch.DoubleTensor(numRows, numCols)
+         local tensor = torch.DoubleTensor(numRows, numCols)
       end
 
       local j = 1
       for num in line:gmatch("%S+") do
-         num = tonumber(num)
-         tensor[i][j] = num
+         local num = tonumber(num)
+         tensor[{i,j}] = num
          j = j + 1
       end
       i = i + 1
@@ -176,9 +186,9 @@ function readTxt2Tensor(txt_file_name)
    return tensor
 end
 
-tester = torch.Tester()
+--tester = torch.Tester()
 
-test = {}
+--test = {}
 
 function test.test()
    -- WARNING: audio.load does not normalize x. Try to read
@@ -207,26 +217,21 @@ function test.test()
       gnuplot.plot(f0 - trueF0)
    end
 
-   spectrogram = world.CheapTrick(x, fs, timeAxis, f0)
+   local spectrogram = world.CheapTrick(x, fs, timeAxis, f0)
 
    do
-      trueSpectrogram = readTxt2Tensor("code/WORLD/ground_truth/spectrogram.txt")
+      local trueSpectrogram = readTxt2Tensor("code/WORLD/ground_truth/spectrogram.txt")
       tester:assert(spectrogram:dim() == trueSpectrogram:dim() and
                        spectrogram:size(1) == trueSpectrogram:size(1) and
                        spectrogram:size(2) == trueSpectrogram:size(2))
       local correct = torch.lt(torch.abs(spectrogram - trueSpectrogram), 1e-3):sum()
-      local nDimensions = spectrogram:dim()
 
-      local total = 1
-      for i = 1,nDimensions do
-         total = total * spectrogram:size(i)
-      end
       gfx.image(torch.log(spectrogram))
 
-      print("Correct / total = " .. correct .. "/" .. total)
+      print("Correct / total = " .. correct .. "/" .. spectrogram:numel())
    end
 
-   aperiodicity = world.D4C(x, fs, timeAxis, f0)
+   local aperiodicity = world.D4C(x, fs, timeAxis, f0)
    gfx.image(aperiodicity)
 
    --[[
@@ -236,11 +241,11 @@ function test.test()
    local smSpectrogram = audio.spectrogram(x, windowSizeSamples, 'hamming', windowSizeSamples / 16)
    gfx.image(smSpectrogram)
    return spectrogram, smSpectrogram
-   --]]
+   ]]--
 end
 
-tester:add(test)
-tester:run()
+--tester:add(test)
+--tester:run()
 
 --spectrogram, smSpectrogram = test()
 --print(spectrogram:size())

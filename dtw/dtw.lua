@@ -9,8 +9,16 @@ function dtw(source, target, distanceFunc)
    local N, M, F = source:size(1), target:size(1), source:size(2)
 
    -- construct cost matrix
+   local sourceExpand = torch.expand(source:resize(N, F, 1), N, F, M)
+   local sourceExpand = sourceExpand:transpose(2,3) -- N by M by F
+   assert(LongStorageEq(sourceExpand:size(),torch.LongStorage({N, M, F})))
+
+   local targetExpand = torch.expand(target:resize(M, F, 1), M, F, N)
+   local targetExpand = targetExpand:permute(3, 1, 2)
+   assert(LongStorageEq(targetExpand:size(),torch.LongStorage({N, M, F})))
+
    local function cost(i, j)
-      return distanceFunc(sourceExpand[{i,{}}], targetExpand[{j,{}}])
+      return distanceFunc(sourceExpand[{i,j,{}}], targetExpand[{i,j,{}}])
    end
 
    -- accumulated cost matrix
@@ -59,6 +67,21 @@ function dtw(source, target, distanceFunc)
    end
    table.insert(path, 1, {1, 1})
    return path
+end
+
+-- I can change the metatable of LongStorage to actually use the == operator,
+-- but I don't want to change the API.
+local function LongStorageEq(store1, store2)
+   assert(torch.type(store2) == "torch.LongStorage")
+   if(#store1 ~= #store2) then
+      return false
+   end
+   for i = 1,#store1 do
+      if (store1[i] ~= store2[i]) then
+         return false
+      end
+   end
+   return true
 end
 
 --[[ WARNING: I believe this should only be used for

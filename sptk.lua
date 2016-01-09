@@ -1,0 +1,1 @@
+-- TODO: sp2mgc (use mgcep in SPTK) and mgc2sp
